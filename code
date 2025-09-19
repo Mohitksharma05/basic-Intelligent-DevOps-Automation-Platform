@@ -1,0 +1,78 @@
+from flask import Flask, render_template_string
+import paramiko
+
+app = Flask(__name__)
+
+clients = [
+    {"host": "192.168.1.101", "username": "user1", "password": "pass1"},
+    {"host": "192.168.1.102", "username": "user2", "password": "pass2"},
+    {"host": "192.168.1.103", "username": "user3", "password": "pass3"},
+    {"host": "192.168.1.104", "username": "user4", "password": "pass4"},
+]
+
+def ssh_command(client, command):
+    ssh = paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    ssh.connect(client["host"], username=client["username"], password=client["password"])
+    stdin, stdout, stderr = ssh.exec_command(command)
+    output = stdout.read().decode().strip()
+    ssh.close()
+    return output
+
+def collect_metrics():
+    uptime_data, filesystem_data, io_data = {}, {}, {}
+    for client in clients:
+        host = client["host"]
+        try:
+            uptime_output = ssh_command(client, "cat /proc/uptime")
+            uptime_seconds = float(uptime_output.split()[0])
+            uptime_percent = min(100, round((uptime_seconds / (24 * 3600)) * 100, 2))
+            uptime_data[host] = uptime_percent
+
+            fs_output = ssh_command(client, "df --output=pcent / | tail -1")
+            fs_percent = int(fs_output.strip().replace('%', ''))
+            filesystem_data[host] = fs_percent
+
+            io_output = ssh_command(client, "iostat -dx | awk '/^sda/ {print $NF}'")
+            io_percent = float(io_output.strip())
+            io_data[host] = io_percent
+
+        except Exception as e:
+            uptime_data[host] = 0
+            filesystem_data[host] = 0
+            io_data[host] = 0
+    return uptime_data, filesystem_data, io_data
+
+@app.route("/")
+def dashboard():
+    uptime_data, filesystem_data, io_data = collect_metrics()
+    html = """
+    <html>
+    <head><title>DevOps Dashboard</title></head>
+    <body>
+        <h1>Intelligent DevOps Automation Platform</h1>
+        <h2>System Uptime (%)</h2>
+        <ul>
+        {% for host, value in uptime.items() %}
+            <li>{{ host }}: {{ value }}%</li>
+        {% endfor %}
+        </ul>
+        <h2>Filesystem Utilization (%)</h2>
+        <ul>
+        {% for host, value in filesystem.items() %}
+            <li>{{ host }}: {{ value }}%</li>
+        {% endfor %}
+        </ul>
+        <h2>I/O Utilization (%)</h2>
+        <ul>
+        {% for host, value in io.items() %}
+            <li>{{ host }}: {{ value }}%</li>
+        {% endfor %}
+        </ul>
+    </body>
+    </html>
+    """
+    return render_template_string(html, uptime=uptime_data, filesystem=filesystem_data, io=io_data)
+
+if __name__ == "__main__":
+    app.run(debug=True)
